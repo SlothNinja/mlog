@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/datastore"
+	"github.com/SlothNinja/codec"
 	"github.com/SlothNinja/color"
 	"github.com/SlothNinja/log"
 	"github.com/SlothNinja/restful"
@@ -32,6 +33,41 @@ type MLog struct {
 // func (ms *Messages) FromProperty(p datastore.Property) error {
 // 	return codec.Decode(ms, p.Value().([]byte))
 // }
+
+func (ml *MLog) Load(ps []datastore.Property) error {
+	log.Debugf("Entering")
+	defer log.Debugf("Exiting")
+
+	err := datastore.LoadStruct(ml, ps)
+	if err != nil {
+		return err
+	}
+
+	var ms Messages
+	err = codec.Decode(&ms, ml.SavedState)
+	if err != nil {
+		return err
+	}
+	ml.Messages = ms
+	return nil
+}
+
+func (ml *MLog) Save() ([]datastore.Property, error) {
+	log.Debugf("Entering")
+	defer log.Debugf("Exiting")
+
+	v, err := codec.Encode(ml.Messages)
+	if err != nil {
+		return nil, err
+	}
+	ml.SavedState = v
+	return datastore.SaveStruct(ml)
+}
+
+func (ml *MLog) LoadKey(k *datastore.Key) error {
+	ml.Key = k
+	return nil
+}
 
 func New(id int64) *MLog {
 	return &MLog{Key: datastore.IDKey(kind, id, nil)}
@@ -136,6 +172,9 @@ func getID(c *gin.Context) (int64, error) {
 }
 
 func Get(c *gin.Context) {
+	log.Debugf("Entering")
+	defer log.Debugf("Exiting")
+
 	dsClient, err := datastore.NewClient(c, "")
 	if err != nil {
 		log.Errorf(err.Error())
@@ -151,12 +190,14 @@ func Get(c *gin.Context) {
 	}
 
 	ml := New(id)
+	log.Debugf("ml.Key: %v", ml.Key)
 	err = dsClient.Get(c, ml.Key, ml)
 	if err != nil {
 		restful.AddErrorf(c, "Unable to get message log with ID: %v", id)
 		c.Redirect(http.StatusSeeOther, homePath)
 		return
 	}
+	log.Debugf("ml: %#v", ml)
 	with(c, ml)
 }
 
