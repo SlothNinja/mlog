@@ -20,7 +20,7 @@ type MLog struct {
 	// Messages  `gae:"SavedState"`
 	Key        *datastore.Key `datastore:"__key__"`
 	Messages   `datastore:"-"`
-	SavedState []byte
+	SavedState []byte `datastore:",noindex"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
