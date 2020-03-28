@@ -27,20 +27,6 @@ func (ml *MLog) NewMessage(c *gin.Context) *Message {
 
 type Messages []*Message
 
-//func (m *Message) UserLink(ctx context.Context) (ul template.HTML) {
-//	creator := user.New(ctx)
-//	creator.ID = m.CreatorID
-//	switch err := datastore.Get(ctx, creator); {
-//	case err != nil:
-//		log.Errorf(ctx, "Message#UserLink Error: %v", err)
-//	case creator == nil:
-//		log.Errorf(ctx, "Unable to find creator for ID: %v", m.CreatorID)
-//	default:
-//		ul = creator.Link()
-//	}
-//	return
-//}
-
 func (m *Message) Color(cm color.Map) template.HTML {
 	if c, ok := cm[int(m.CreatorID)]; ok {
 		return template.HTML(c.String())
