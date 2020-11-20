@@ -80,6 +80,16 @@ func (client Client) AddMessage(prefix string) gin.HandlerFunc {
 		log.Debugf("Entering")
 		defer log.Debugf("Exiting")
 
+		cu, err := user.CurrentFrom(c)
+		if err != nil {
+			restful.AddErrorf(c, "must be logged in to send a message")
+			c.HTML(http.StatusOK, "shared/flashbox", gin.H{
+				"Notices": restful.NoticesFrom(c),
+				"Errors":  restful.ErrorsFrom(c),
+			})
+			return
+		}
+
 		ml := From(c)
 		if ml == nil {
 			log.Errorf("Missing messagelog.")
@@ -105,7 +115,7 @@ func (client Client) AddMessage(prefix string) gin.HandlerFunc {
 			}
 			m.CreatorID = intID
 		}
-		_, err := client.DS.Put(c, ml.Key, ml)
+		_, err = client.DS.Put(c, ml.Key, ml)
 		if err != nil {
 			restful.AddErrorf(c, err.Error())
 			log.Errorf(err.Error())
@@ -119,7 +129,7 @@ func (client Client) AddMessage(prefix string) gin.HandlerFunc {
 			"message": m,
 			"ctx":     c,
 			"map":     color.MapFrom(c),
-			"link":    user.CurrentFrom(c).Link(),
+			"link":    cu.Link(),
 		})
 	}
 }
