@@ -58,11 +58,15 @@ func (ml *MLog) LoadKey(k *datastore.Key) error {
 }
 
 type Client struct {
-	DS *datastore.Client
+	DS   *datastore.Client
+	User user.Client
 }
 
-func NewClient(dsClient *datastore.Client) Client {
-	return Client{DS: dsClient}
+func NewClient(userClient user.Client, dsClient *datastore.Client) Client {
+	return Client{
+		User: userClient,
+		DS:   dsClient,
+	}
 }
 
 func New(id int64) *MLog {
@@ -80,7 +84,7 @@ func (client Client) AddMessage(prefix string) gin.HandlerFunc {
 		log.Debugf("Entering")
 		defer log.Debugf("Exiting")
 
-		cu, err := user.CurrentFrom(c)
+		cu, err := client.User.Current(c)
 		if err != nil {
 			restful.AddErrorf(c, "must be logged in to send a message")
 			c.HTML(http.StatusOK, "shared/flashbox", gin.H{
