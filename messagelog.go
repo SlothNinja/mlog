@@ -1,37 +1,37 @@
 package mlog
 
 import (
-	"net/http"
-	"strconv"
+	"errors"
+	"html/template"
 	"time"
 
 	"cloud.google.com/go/datastore"
 	"github.com/SlothNinja/codec"
-	"github.com/SlothNinja/color"
 	"github.com/SlothNinja/log"
-	"github.com/SlothNinja/restful"
+	"github.com/SlothNinja/sn"
 	"github.com/SlothNinja/user"
 	"github.com/gin-gonic/gin"
+	"github.com/patrickmn/go-cache"
 )
 
 type MLog struct {
 	Key        *datastore.Key `datastore:"__key__"`
-	Messages   `datastore:"-"`
-	SavedState []byte `datastore:",noindex"`
+	Messages   []*Message     `datastore:"-"`
+	SavedState []byte         `datastore:",noindex"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
 
 func (ml *MLog) Load(ps []datastore.Property) error {
-	log.Debugf("Entering")
-	defer log.Debugf("Exiting")
+	log.Debugf(msgEnter)
+	defer log.Debugf(msgExit)
 
 	err := datastore.LoadStruct(ml, ps)
 	if err != nil {
 		return err
 	}
 
-	var ms Messages
+	var ms []*Message
 	err = codec.Decode(&ms, ml.SavedState)
 	if err != nil {
 		return err
@@ -41,8 +41,8 @@ func (ml *MLog) Load(ps []datastore.Property) error {
 }
 
 func (ml *MLog) Save() ([]datastore.Property, error) {
-	log.Debugf("Entering")
-	defer log.Debugf("Exiting")
+	log.Debugf(msgEnter)
+	defer log.Debugf(msgExit)
 
 	v, err := codec.Encode(ml.Messages)
 	if err != nil {
@@ -58,118 +58,115 @@ func (ml *MLog) LoadKey(k *datastore.Key) error {
 }
 
 type Client struct {
-	DS   *datastore.Client
-	User user.Client
+	*sn.Client
+	User *user.Client
 }
 
-func NewClient(userClient user.Client, dsClient *datastore.Client) Client {
-	return Client{
-		User: userClient,
-		DS:   dsClient,
+func NewClient(dsClient *datastore.Client, userClient *user.Client, logger *log.Logger, mcache *cache.Cache) *Client {
+	return &Client{
+		Client: sn.NewClient(dsClient, logger, mcache, nil),
+		User:   userClient,
 	}
 }
 
 func New(id int64) *MLog {
-	return &MLog{Key: datastore.IDKey(kind, id, nil)}
+	return &MLog{Key: key(id)}
+}
+
+func key(id int64) *datastore.Key {
+	return datastore.IDKey(kind, id, nil)
 }
 
 const (
 	kind     = "MessageLog"
 	mlKey    = "MessageLog"
+	msgEnter = "Entering"
+	msgExit  = "Exiting"
 	homePath = "/"
 )
 
-func (client Client) AddMessage(prefix string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		log.Debugf("Entering")
-		defer log.Debugf("Exiting")
-
-		cu, err := client.User.Current(c)
-		if err != nil {
-			restful.AddErrorf(c, "must be logged in to send a message")
-			c.HTML(http.StatusOK, "shared/flashbox", gin.H{
-				"Notices": restful.NoticesFrom(c),
-				"Errors":  restful.ErrorsFrom(c),
-			})
-			return
-		}
-
-		ml := From(c)
-		if ml == nil {
-			log.Errorf("Missing messagelog.")
-			restful.AddErrorf(c, "Missing messagelog.")
-			c.HTML(http.StatusOK, "shared/flashbox", gin.H{
-				"Notices": restful.NoticesFrom(c),
-				"Errors":  restful.ErrorsFrom(c),
-			})
-			return
-		}
-		m := ml.NewMessage(c)
-		m.Text = c.PostForm("message")
-		creatorsid := c.PostForm("creatorid")
-		if creatorsid != "" {
-			intID, err := strconv.ParseInt(creatorsid, 10, 64)
-			if err != nil {
-				restful.AddErrorf(c, "Invalid value received for creatorsid: %v", creatorsid)
-				c.HTML(http.StatusOK, "shared/flashbox", gin.H{
-					"Notices": restful.NoticesFrom(c),
-					"Errors":  restful.ErrorsFrom(c),
-				})
-				return
-			}
-			m.CreatorID = intID
-		}
-		_, err = client.DS.Put(c, ml.Key, ml)
-		if err != nil {
-			restful.AddErrorf(c, err.Error())
-			log.Errorf(err.Error())
-			c.HTML(http.StatusOK, "shared/flashbox", gin.H{
-				"Notices": restful.NoticesFrom(c),
-				"Errors":  restful.ErrorsFrom(c),
-			})
-			return
-		}
-		c.HTML(http.StatusOK, "shared/message", gin.H{
-			"message": m,
-			"ctx":     c,
-			"map":     color.MapFrom(c),
-			"link":    cu.Link(),
-		})
+func (ml *MLog) AddMessage(u *user.User, text string) *Message {
+	t := time.Now()
+	m := &Message{
+		CreatorID: u.ID(),
+		CreatedAt: t,
+		UpdatedAt: t,
+		Text:      template.HTMLEscapeString(text),
 	}
+	ml.Messages = append(ml.Messages, m)
+	return m
 }
 
-func getID(c *gin.Context) (int64, error) {
-	sid := c.Param("hid")
-	return strconv.ParseInt(sid, 10, 64)
+var (
+	ErrNotFound     = errors.New("not found")
+	ErrInvalidCache = errors.New("invalid cached value")
+	ErrMissingID    = errors.New("missing identifier")
+)
+
+func (client *Client) mcGet(c *gin.Context, id int64) (*MLog, error) {
+	client.Log.Debugf(msgEnter)
+	defer client.Log.Debugf(msgExit)
+
+	k := key(id).Encode()
+	item, found := client.Cache.Get(k)
+	if !found {
+		return nil, ErrNotFound
+	}
+
+	ml, ok := item.(*MLog)
+	if !ok {
+		// delete the invaide cached value
+		client.Cache.Delete(k)
+		return nil, ErrInvalidCache
+	}
+	return ml, nil
 }
 
-func (client Client) Get(c *gin.Context) {
-	log.Debugf("Entering")
-	defer log.Debugf("Exiting")
-
-	id, err := getID(c)
-	if err != nil {
-		restful.AddErrorf(c, err.Error())
-		c.Redirect(http.StatusSeeOther, homePath)
-		return
-	}
+func (client *Client) dsGet(c *gin.Context, id int64) (*MLog, error) {
+	client.Log.Debugf(msgEnter)
+	defer client.Log.Debugf(msgExit)
 
 	ml := New(id)
-	err = client.DS.Get(c, ml.Key, ml)
-	if err != nil {
-		restful.AddErrorf(c, "Unable to get message log with ID: %v", id)
-		c.Redirect(http.StatusSeeOther, homePath)
-		return
+	err := client.DS.Get(c, ml.Key, ml)
+	return ml, err
+}
+
+func (client *Client) Get(c *gin.Context, id int64) (*MLog, error) {
+	client.Log.Debugf(msgEnter)
+	defer client.Log.Debugf(msgExit)
+
+	if id == 0 {
+		return nil, ErrMissingID
 	}
-	with(c, ml)
+
+	ml, err := client.mcGet(c, id)
+	if err == nil {
+		return ml, nil
+	}
+
+	return client.dsGet(c, id)
 }
 
-func From(c *gin.Context) (ml *MLog) {
-	ml, _ = c.Value(mlKey).(*MLog)
-	return
+func (client *Client) Put(c *gin.Context, id int64, ml *MLog) (*datastore.Key, error) {
+	client.Log.Debugf(msgEnter)
+	defer client.Log.Debugf(msgExit)
+
+	k, err := client.DS.Put(c, key(id), ml)
+	if err != nil {
+		return nil, err
+	}
+
+	return k, client.mcPut(c, k.ID, ml)
 }
 
-func with(c *gin.Context, ml *MLog) *gin.Context {
-	c.Set(mlKey, ml)
-	return c
+func (client *Client) mcPut(c *gin.Context, id int64, ml *MLog) error {
+	client.Log.Debugf(msgEnter)
+	defer client.Log.Debugf(msgExit)
+
+	if id == 0 {
+		return ErrMissingID
+	}
+
+	client.Cache.SetDefault(key(id).Encode(), ml)
+	return nil
 }
