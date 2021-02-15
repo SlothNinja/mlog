@@ -2,7 +2,6 @@ package mlog
 
 import (
 	"errors"
-	"html/template"
 	"time"
 
 	"cloud.google.com/go/datastore"
@@ -86,13 +85,7 @@ const (
 )
 
 func (ml *MLog) AddMessage(u *user.User, text string) *Message {
-	t := time.Now()
-	m := &Message{
-		CreatorID: u.ID(),
-		CreatedAt: t,
-		UpdatedAt: t,
-		Text:      template.HTMLEscapeString(text),
-	}
+	m := NewMessage(u, text)
 	ml.Messages = append(ml.Messages, m)
 	return m
 }
