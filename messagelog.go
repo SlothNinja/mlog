@@ -10,7 +10,6 @@ import (
 	"github.com/SlothNinja/sn"
 	"github.com/SlothNinja/user"
 	"github.com/gin-gonic/gin"
-	"github.com/patrickmn/go-cache"
 )
 
 type MLog struct {
@@ -61,9 +60,9 @@ type Client struct {
 	User *user.Client
 }
 
-func NewClient(dsClient *datastore.Client, userClient *user.Client, logger *log.Logger, mcache *cache.Cache) *Client {
+func NewClient(snClient *sn.Client, userClient *user.Client) *Client {
 	return &Client{
-		Client: sn.NewClient(dsClient, logger, mcache, nil),
+		Client: snClient,
 		User:   userClient,
 	}
 }
