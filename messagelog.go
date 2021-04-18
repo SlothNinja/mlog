@@ -1,6 +1,7 @@
 package mlog
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 type MLog struct {
 	Key        *datastore.Key `datastore:"__key__"`
 	Messages   []*Message     `datastore:"-"`
+	Read       map[int64]int  `datastore:"-" json:"read"`
 	SavedState []byte         `datastore:",noindex"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
@@ -29,12 +31,27 @@ func (ml *MLog) Load(ps []datastore.Property) error {
 		return err
 	}
 
-	var ms []*Message
-	err = codec.Decode(&ms, ml.SavedState)
+	obj := struct {
+		Messages []*Message    `json:"messages"`
+		Read     map[int64]int `json:"read"`
+	}{}
+
+	err = json.Unmarshal(ml.SavedState, &obj)
 	if err != nil {
-		return err
+		var ms []*Message
+		err = codec.Decode(&ms, ml.SavedState)
+		if err != nil {
+			return err
+		}
+		ml.Messages = ms
+		ml.Read = make(map[int64]int)
+		return nil
 	}
-	ml.Messages = ms
+	ml.Messages = obj.Messages
+	ml.Read = obj.Read
+	if ml.Read == nil {
+		ml.Read = make(map[int64]int)
+	}
 	return nil
 }
 
@@ -42,7 +59,12 @@ func (ml *MLog) Save() ([]datastore.Property, error) {
 	log.Debugf(msgEnter)
 	defer log.Debugf(msgExit)
 
-	v, err := codec.Encode(ml.Messages)
+	obj := struct {
+		Messages []*Message    `json:"messages"`
+		Read     map[int64]int `json:"read"`
+	}{Messages: ml.Messages, Read: ml.Read}
+
+	v, err := json.Marshal(&obj)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +108,10 @@ const (
 func (ml *MLog) AddMessage(u *user.User, text string) *Message {
 	m := NewMessage(u, text)
 	ml.Messages = append(ml.Messages, m)
+	if ml.Read == nil {
+		ml.Read = make(map[int64]int)
+	}
+	ml.Read[u.ID()] = len(ml.Messages)
 	return m
 }
 
@@ -133,10 +159,43 @@ func (client *Client) Get(c *gin.Context, id int64) (*MLog, error) {
 
 	ml, err := client.mcGet(c, id)
 	if err == nil {
-		return ml, nil
+		return ml, err
 	}
 
 	return client.dsGet(c, id)
+}
+
+func (client *Client) UpdateRead(c *gin.Context, ml *MLog, u *user.User) (*MLog, error) {
+	ml.Read[u.ID()] = len(ml.Messages)
+	_, err := client.Put(c, ml.Key.ID, ml)
+	if err != nil {
+		return nil, err
+	}
+	return ml, nil
+}
+
+func (client *Client) Unread(c *gin.Context, id int64, u *user.User) (int, error) {
+	client.Log.Debugf(msgEnter)
+	defer client.Log.Debugf(msgExit)
+
+	if id == 0 {
+		return -1, ErrMissingID
+	}
+
+	ml, err := client.mcGet(c, id)
+	if err == nil {
+		client.Log.Debugf("mcGet ml.Read: %#v", ml.Read)
+		client.Log.Debugf("mcGet len(ml.Messages): %v", len(ml.Messages))
+		return len(ml.Messages) - ml.Read[u.ID()], nil
+	}
+
+	ml, err = client.dsGet(c, id)
+	if err != nil {
+		return -1, err
+	}
+	client.Log.Debugf("dsGet ml.Read: %#v", ml.Read)
+	client.Log.Debugf("dsGet len(ml.Messages): %v", len(ml.Messages))
+	return len(ml.Messages) - ml.Read[u.ID()], nil
 }
 
 func (client *Client) Put(c *gin.Context, id int64, ml *MLog) (*datastore.Key, error) {
