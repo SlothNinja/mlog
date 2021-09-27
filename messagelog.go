@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/datastore"
+	"github.com/SlothNinja/client"
 	"github.com/SlothNinja/codec"
 	"github.com/SlothNinja/log"
-	"github.com/SlothNinja/sn"
 	"github.com/SlothNinja/user"
 	"github.com/gin-gonic/gin"
 )
@@ -78,11 +78,11 @@ func (ml *MLog) LoadKey(k *datastore.Key) error {
 }
 
 type Client struct {
-	*sn.Client
+	*client.Client
 	User *user.Client
 }
 
-func NewClient(snClient *sn.Client, userClient *user.Client) *Client {
+func NewClient(snClient *client.Client, userClient *user.Client) *Client {
 	return &Client{
 		Client: snClient,
 		User:   userClient,
