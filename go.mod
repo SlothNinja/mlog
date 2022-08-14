@@ -1,4 +1,4 @@
-module github.com/SlothNinja/mlog/v2
+module github.com/SlothNinja/mlog
 
 go 1.16
 
